@@ -1,0 +1,23 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+}
+
+group 'com.cleanroomc'
+version '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.groovy:groovy:4.0.5'
+    implementation 'org.apache.groovy:groovy-datetime:4.0.5'
+    implementation 'org.apache.groovy:groovy-dateutil:4.0.5'
+    implementation 'org.apache.groovy:groovy-json:4.0.5'
+    implementation 'org.ow2.asm:asm-debug-all:5.2'
+}
+
+test {
+    useJUnitPlatform()
+}
