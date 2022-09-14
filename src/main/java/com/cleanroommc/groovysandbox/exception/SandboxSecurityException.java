@@ -1,6 +1,6 @@
 package com.cleanroommc.groovysandbox.exception;
 
-public class SandboxSecurityException extends Exception {
+public class SandboxSecurityException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 

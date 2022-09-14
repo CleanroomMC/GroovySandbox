@@ -1,4 +1,4 @@
-package com.cleanroommc.groovysandbox.closure;
+package com.cleanroommc.groovysandbox.util;
 
 import groovy.lang.Closure;
 

@@ -1,7 +1,5 @@
 package com.cleanroommc.groovysandbox.interception;
 
-import com.cleanroommc.groovysandbox.interception.CallInterceptor;
-
 /**
  * Represents the next interceptor in the chain.
  *
@@ -35,6 +33,7 @@ import com.cleanroommc.groovysandbox.interception.CallInterceptor;
  *     </dd>
  * </dl>
  */
+@FunctionalInterface
 public interface Invoker {
 
     Object call(Object receiver, String method, Object... args) throws Throwable;
