@@ -34,12 +34,18 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
     private boolean withinClosure = false;
     private SandboxSecurityException exception;
 
+    // Cached Expression instances
+    private ClassExpression classExpression;
+    private ConstantExpression sourceUnitConstantExpression;
+
     public void setSourceUnit(SourceUnit sourceUnit) {
         this.currentSourceUnit = sourceUnit;
+        this.sourceUnitConstantExpression = new ConstantExpression(sourceUnit.getName());
     }
 
     public void setClassNode(ClassNode classNode) {
         this.currentClass = classNode;
+        this.classExpression = new ClassExpression(classNode);
     }
 
     public SandboxSecurityException getAndClearException() {
@@ -208,6 +214,14 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         return new StaticMethodCallExpression(BUBBLEWRAP, name, arguments.length == 0 ? ArgumentListExpression.EMPTY_ARGUMENTS : new ArgumentListExpression(arguments));
     }
 
+    private Expression transformPropertyExpression(PropertyExpression exp) {
+        if (exp.isImplicitThis() && this.withinClosure && !this.variableTracker.isIn(exp.getObjectExpression())) {
+            return ClosureSupport.getClosureSelfCall();
+        } else {
+            return transform(exp.getObjectExpression());
+        }
+    }
+
     /**
      * Do inner transformations to bubblewrap calls and peek inside Closures
      */
@@ -230,7 +244,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
             try {
                 closureExpression.getCode().visit(this);
             } finally {
-                withinClosure = false;
+                withinClosure = old;
             }
         }
         if (expression instanceof MethodCallExpression) {
@@ -252,11 +266,11 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     throw new IllegalStateException("Owning class not defined.");
                 }
                 return rerouteCall(Bubblewrap.WRAP_SUPER_CALL,
-                        new ClassExpression(this.currentClass),
+                        this.classExpression,
                         objExpression,
                         methodExpression,
                         argumentExpression,
-                        new ConstantExpression(this.currentSourceUnit.getName()),
+                        this.sourceUnitConstantExpression,
                         new ConstantExpression(expression.getLineNumber()));
             }
             return rerouteCall(Bubblewrap.WRAP_CALL,
@@ -265,7 +279,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     callExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
                     methodExpression,
                     argumentExpression,
-                    new ConstantExpression(this.currentSourceUnit.getName()),
+                    this.sourceUnitConstantExpression,
                     new ConstantExpression(expression.getLineNumber()));
         }
         if (expression instanceof StaticMethodCallExpression) {
@@ -277,7 +291,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     new ClassExpression(callExpression.getOwnerType()),
                     new ConstantExpression(callExpression.getMethod()),
                     transformArguments(callExpression.getArguments()),
-                    new ConstantExpression(this.currentSourceUnit.getName()),
+                    this.sourceUnitConstantExpression,
                     new ConstantExpression(expression.getLineNumber()));
         }
         if (expression instanceof MethodPointerExpression) {
@@ -286,6 +300,40 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     new ClassNode(BubblewrappedMethodClosure.class),
                     new ArgumentListExpression(transform(pointerExpression.getExpression()), transform(pointerExpression.getMethodName())));
         }
+        if (expression instanceof ConstructorCallExpression) {
+            ConstructorCallExpression callExpression = (ConstructorCallExpression) expression;
+            if (!callExpression.isSpecialCall()) {
+                return rerouteCall(Bubblewrap.WRAP_CONSTRUCTOR_CALL,
+                        new ClassExpression(expression.getType()),
+                        transformArguments(callExpression.getArguments()),
+                        this.sourceUnitConstantExpression,
+                        new ConstantExpression(expression.getLineNumber()));
+            }
+        }
+        if (expression instanceof AttributeExpression) {
+            AttributeExpression attributeExpression = (AttributeExpression) expression;
+            return rerouteCall(Bubblewrap.WRAP_GET_ATTRIBUTE_CALL,
+                    transform(attributeExpression.getObjectExpression()),
+                    attributeExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    attributeExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    transform(attributeExpression.getProperty()),
+                    this.sourceUnitConstantExpression,
+                    new ConstantExpression(expression.getLineNumber()));
+        }
+        if (expression instanceof PropertyExpression) {
+            PropertyExpression propertyExpression = (PropertyExpression) expression;
+            return rerouteCall(Bubblewrap.WRAP_GET_PROPERTY_CALL,
+                    transformPropertyExpression(propertyExpression),
+                    propertyExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    propertyExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    transform(propertyExpression.getProperty()),
+                    this.sourceUnitConstantExpression,
+                    new ConstantExpression(expression.getLineNumber()));
+        }
+        if (expression instanceof DeclarationExpression) {
+            handleDeclarations((DeclarationExpression) expression);
+        }
+        return super.transform(expression);
     }
 
     /**

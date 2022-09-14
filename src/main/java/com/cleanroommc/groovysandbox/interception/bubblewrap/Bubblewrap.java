@@ -25,6 +25,9 @@ public class Bubblewrap {
     public static final String WRAP_STATIC_CALL = "wrapStaticCall";
     public static final String WRAP_CALL = "wrapStaticCall";
     public static final String WRAP_SUPER_CALL = "wrapSuperCall";
+    public static final String WRAP_CONSTRUCTOR_CALL = "wrapConstructorCall";
+    public static final String WRAP_GET_ATTRIBUTE_CALL = "wrapGetAttribute";
+    public static final String WRAP_GET_PROPERTY_CALL = "wrapGetProperty";
 
     private static final DummyCallSite CALL_SITE = new DummyCallSite();
     private static final Object[] SINGULAR_ELEMENT_ARRAY = new Object[1];
