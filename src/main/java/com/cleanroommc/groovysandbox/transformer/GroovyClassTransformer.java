@@ -204,7 +204,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
     public Expression transform(Expression expression) {
         // expression = super.transform(expression);
         Expression newExpression = TransformationManager.INSTANCE.transform(expression);
-        newExpression = transform(newExpression);
+        newExpression = innerTransform(newExpression);
         if (newExpression != null) {
             newExpression.setSourcePosition(expression);
         }
