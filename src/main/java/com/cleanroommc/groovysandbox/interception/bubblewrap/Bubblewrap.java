@@ -123,19 +123,17 @@ public class Bubblewrap {
                 List<Object> targets = ClosureSupport.targetsOf((Closure) receiver);
                 Class[] argTypes = convertToTypeArray(args);
 
-                // in the first phase, we look for exact method match
+                // First phase: look for exact method match
                 for (Object candidate : targets) {
                     if (InvokerHelper.getMetaClass(candidate).pickMethod(method, argTypes) != null) {
                         return wrapCall(candidate, false, false, method, args);
                     }
                 }
-                // in the second phase, we try to call invokeMethod on them
+                // Second phase: try calling invokeMethod on them
                 for (Object candidate : targets) {
                     try {
                         return wrapCall(candidate, false, false, "invokeMethod", method, args);
-                    } catch (MissingMethodException ignored) {
-                        // try the next one
-                    }
+                    } catch (MissingMethodException ignored) { } // Try the next one
                 }
                 // We tried to be smart about Closure.invokeMethod, but we are just not finding any.
                 // So we'll have to treat this like any other method.

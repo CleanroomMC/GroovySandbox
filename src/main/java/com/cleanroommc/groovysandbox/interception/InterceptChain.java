@@ -7,7 +7,7 @@ public abstract class InterceptChain implements Invoker {
     private final List<CallInterceptor> callInterceptors;
     private final int size;
 
-    private int index = -1;
+    private int index = 0;
 
     public InterceptChain() {
         this.callInterceptors = InterceptionManager.INSTANCE.getCallInterceptors();
