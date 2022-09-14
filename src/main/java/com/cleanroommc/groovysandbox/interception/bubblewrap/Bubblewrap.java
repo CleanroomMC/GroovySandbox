@@ -22,6 +22,10 @@ import static org.codehaus.groovy.runtime.MetaClassHelper.convertToTypeArray;
 
 public class Bubblewrap {
 
+    public static final String WRAP_STATIC_CALL = "wrapStaticCall";
+    public static final String WRAP_CALL = "wrapStaticCall";
+    public static final String WRAP_SUPER_CALL = "wrapSuperCall";
+
     private static final DummyCallSite CALL_SITE = new DummyCallSite();
     private static final Object[] SINGULAR_ELEMENT_ARRAY = new Object[1];
     private static final ThreadLocal<String> SOURCE = new ThreadLocal<>();
