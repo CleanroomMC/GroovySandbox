@@ -1,6 +1,7 @@
 package com.cleanroommc.groovysandbox.util;
 
 import groovy.lang.Closure;
+import org.codehaus.groovy.ast.expr.*;
 
 import java.util.*;
 
@@ -11,6 +12,17 @@ import java.util.*;
  */
 // TODO: Change List => Arrays
 public class ClosureSupport {
+
+    private static final MethodCallExpression CLOSURE$THIS;
+
+    static {
+        CLOSURE$THIS = new MethodCallExpression(new VariableExpression("this"), "composeSelf", new ArgumentListExpression(new ConstantExpression(0, true)));
+        CLOSURE$THIS.setImplicitThis(true);
+    }
+
+    public static MethodCallExpression getClosureSelfCall() {
+        return CLOSURE$THIS;
+    }
 
     /**
      * {@link Closure} forwards methods/properties to other objects, depending on the resolution strategy.
