@@ -5,19 +5,19 @@ import com.cleanroommc.groovysandbox.interception.bubblewrap.Bubblewrap;
 import com.cleanroommc.groovysandbox.interception.bubblewrap.BubblewrappedMethodClosure;
 import com.cleanroommc.groovysandbox.interception.bubblewrap.Bubblewraps;
 import com.cleanroommc.groovysandbox.util.ClosureSupport;
+import com.cleanroommc.groovysandbox.util.Operators;
 import groovy.lang.Script;
 import org.codehaus.groovy.ast.*;
 import org.codehaus.groovy.ast.expr.*;
 import org.codehaus.groovy.ast.stmt.*;
 import org.codehaus.groovy.control.SourceUnit;
+import org.codehaus.groovy.runtime.ScriptBytecodeAdapter;
 import org.codehaus.groovy.syntax.Token;
 import org.codehaus.groovy.syntax.Types;
 
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
-
-import static org.codehaus.groovy.ast.expr.ArgumentListExpression.EMPTY_ARGUMENTS;
 
 public class GroovyClassTransformer extends ClassCodeExpressionTransformer implements VariableVisitor {
 
@@ -344,6 +344,113 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         if (expression instanceof DeclarationExpression) {
             handleDeclarations((DeclarationExpression) expression);
         }
+        if (expression instanceof BinaryExpression) {
+            BinaryExpression binaryExpression = (BinaryExpression) expression;
+            int binaryExpressionType = binaryExpression.getOperation().getType();
+            // This covers everything from a + b to a = b
+            if (Types.ofType(binaryExpressionType, Types.ASSIGNMENT_OPERATOR)) {
+                // Simple assignment like = as well as compound assignments like +=, -=, etc
+                // How we dispatch this depends on the lhs expressions:
+                // According to AsmClassGenerator, PropertyExpression, AttributeExpression, FieldExpression, VariableExpression are all valid lhs expressions
+                Expression lhsExpression = binaryExpression.getLeftExpression();
+                if (lhsExpression instanceof VariableExpression) {
+                    VariableExpression variableExpression = (VariableExpression) lhsExpression;
+                    if (variableExpression.isSuperExpression() || variableExpression.isThisExpression() || this.variableTracker.isIn(variableExpression)) {
+                        // We don't care what sandboxed code does to itself until it starts interacting with outside world
+                        return super.transform(expression);
+                    } else {
+                        // If the variable is not an in-scope local variable, it gets treated as a property access with implicit this
+                        // See AsmClassGenerator.visitVariableExpression and processClassVariable
+                        PropertyExpression propertyExpression = new PropertyExpression(VariableExpression.THIS_EXPRESSION, variableExpression.getName());
+                        propertyExpression.setImplicitThis(true);
+                        propertyExpression.setSourcePosition(variableExpression);
+                        lhsExpression = propertyExpression;
+                    }
+                }
+                if (lhsExpression instanceof PropertyExpression) {
+                    PropertyExpression propertyExpression = (PropertyExpression) lhsExpression;
+                    Bubblewraps bubblewrap;
+                    if (lhsExpression instanceof AttributeExpression) {
+                        bubblewrap = Bubblewraps.wrapSetAttribute;
+                    } else {
+                        Expression receiver = propertyExpression.getObjectExpression();
+                        if (receiver instanceof VariableExpression && ((VariableExpression) receiver).isThisExpression()) {
+                            FieldNode field = this.currentClass != null ? this.currentClass.getField(propertyExpression.getPropertyAsString()) : null;
+                            if (field != null) {
+                                // Could also verify that it is final, but not necessary
+                                // cf. BinaryExpression.transformExpression; super.transform(exp) transforms the LHS to checkedGetProperty
+                                return new BinaryExpression(lhsExpression, binaryExpression.getOperation(), transform(binaryExpression.getRightExpression()));
+                            }
+                        }
+                        bubblewrap = Bubblewraps.wrapSetProperty;
+                    }
+                    return rerouteCall(bubblewrap,
+                            transformPropertyExpression(propertyExpression),
+                            transform(propertyExpression.getProperty()),
+                            propertyExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                            propertyExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                            new ConstantExpression(binaryExpressionType, true),
+                            this.sourceUnitConstantExpression,
+                            new ConstantExpression(expression.getLineNumber()));
+                } else if (lhsExpression instanceof FieldExpression) {
+                    // While javadoc of FieldExpression isn't very clear
+                    // AsmClassGenerator maps this to GETSTATIC/SETSTATIC/GETFIELD/SETFIELD access
+                    // Not sure how we can intercept this, so skipping this for now
+                    // Additionally, it looks like FieldExpression might only be used internally during
+                    // Class generation for AttributeExpression/PropertyExpression in AsmClassGenerator
+                    // E.g: the receiver for the expression is always referenced indirectly via the stack
+                    // So we are limited in what we can do at this level.
+                    return super.transform(expression);
+                } else if (lhsExpression instanceof BinaryExpression) {
+                    BinaryExpression lhsBinaryExpression = (BinaryExpression) lhsExpression;
+                    if (lhsBinaryExpression.getOperation().getType() == Types.LEFT_SQUARE_BRACKET) { // Expression of the form x[y] = z
+                        return rerouteCall(Bubblewraps.wrapSetArray,
+                                transform(lhsBinaryExpression.getLeftExpression()),
+                                transform(lhsBinaryExpression.getRightExpression()),
+                                new ConstantExpression(binaryExpressionType, true),
+                                transform(binaryExpression.getRightExpression()));
+                    }
+                }
+                throw new AssertionError("Unexpected LHS of an assignment: " + lhsExpression.getClass());
+            }
+            if (binaryExpressionType == Types.LEFT_SQUARE_BRACKET) { // Array reference
+                return rerouteCall(Bubblewraps.wrapGetArray, transform(binaryExpression.getLeftExpression()), transform(binaryExpression.getRightExpression()));
+            } else if (binaryExpressionType == Types.KEYWORD_INSTANCEOF) { // instanceof operator
+                return super.transform(expression);
+            } else if (Operators.isLogicalOperator(binaryExpressionType)) {
+                return super.transform(expression);
+            } else if (binaryExpressionType == Types.KEYWORD_IN) {
+                // Membership operator: issue JENKINS-28154
+                // This requires inverted operand order: a in [...] -> [...].isCase(a)
+                return rerouteCall(Bubblewraps.wrapCall,
+                        transform(binaryExpression.getRightExpression()),
+                        ConstantExpression.PRIM_FALSE,
+                        ConstantExpression.PRIM_FALSE,
+                        new ConstantExpression("isCase"),
+                        transform(binaryExpression.getLeftExpression()),
+                        this.sourceUnitConstantExpression,
+                        new ConstantExpression(expression.getLineNumber()));
+            } else if (Operators.isRegexpComparisonOperator(binaryExpressionType)) {
+                return rerouteCall(Bubblewraps.wrapStaticCall,
+                        new ClassExpression(new ClassNode(ScriptBytecodeAdapter.class)), // TODO cache?
+                        new ConstantExpression(Operators.binaryOperatorMethods(binaryExpressionType)),
+                        transform(binaryExpression.getLeftExpression()),
+                        transform(binaryExpression.getRightExpression()),
+                        this.sourceUnitConstantExpression,
+                        new ConstantExpression(expression.getLineNumber()));
+            } else if (Operators.isComparisionOperator(binaryExpressionType)) {
+                return rerouteCall(Bubblewraps.wrapComparison,
+                        transform(binaryExpression.getLeftExpression()),
+                        new ConstantExpression(binaryExpressionType),
+                        transform(binaryExpression.getRightExpression()));
+            } else {
+                // Normally binary operators like a + b. TODO: check what other weird binary operators land here
+                return rerouteCall(Bubblewraps.wrapBinaryOperation,
+                        transform(binaryExpression.getLeftExpression()),
+                        new ConstantExpression(binaryExpressionType),
+                        transform(binaryExpression.getRightExpression()));
+            }
+        }
         if (expression instanceof PrefixExpression) {
             PrefixExpression prefixExpression = (PrefixExpression) expression;
             return operationExpression(expression, prefixExpression.getExpression(), prefixExpression.getOperation(), OperationSide.PREFIX);
@@ -422,14 +529,14 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     // a++ -> [a, a = a.next()][0]
                     ListExpression lhs = new ListExpression();
                     lhs.addExpression(atomicExpression);
-                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, EMPTY_ARGUMENTS);
+                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, ArgumentListExpression.EMPTY_ARGUMENTS);
                     operationCallExpression.setSourcePosition(atomicExpression);
                     lhs.addExpression(operationCallExpression);
                     BinaryExpression replacement = new BinaryExpression(lhs, LEFT_SQUARE_BRACKET_TOKEN, new ConstantExpression(0, true));
                     replacement.setSourcePosition(wholeExpression);
                     return transform(replacement);
                 } else { // ++a -> a = a.next()
-                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, EMPTY_ARGUMENTS);
+                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, ArgumentListExpression.EMPTY_ARGUMENTS);
                     BinaryExpression replacement = new BinaryExpression(atomicExpression, ASSIGNMENT_TOKEN, operationCallExpression);
                     replacement.setSourcePosition(wholeExpression);
                     return transform(replacement);
@@ -454,14 +561,35 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                     propertyExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
                     new ConstantExpression(operation));
         }
-        // a.b++ where a.b is a FieldExpression.
-        // TODO: It is unclear if this is actually reachable. I think that syntax like `a.b` will always be a PropertyExpression in this context.
-        //  We handle it explicitly as a precaution, since the catch-all below does not store the result, which would definitely be wrong for FieldExpression.
+        // a.b++ where a.b is a FieldExpression
+        // TODO: It is unclear if this is actually reachable, I think that syntax like `a.b` will always be a PropertyExpression in this context
+        // We handle it explicitly as a precaution, since the catch-all below does not store the result
+        // Which would definitely be wrong for FieldExpression
         if (atomicExpression instanceof FieldExpression) {
             // See note in innerTransform regarding FieldExpression; this type of expression cannot be intercepted.
             return atomicExpression;
         }
-
+        // method()++, 1++, any other cases where "atomic" is not valid as the LHS of an assignment expression
+        // So no store is performed, see BinaryExpressionHelper
+        if (side == OperationSide.POSTFIX) {
+            // We need to intercept the call to x.next() while making sure that x is not evaluated more than once.
+            //  x++ -> (temp -> { temp.next(); temp } (x))
+            VariableScope closureScope = new VariableScope();
+            Parameter[] parameters = new Parameter[] { new Parameter(ClassHelper.OBJECT_TYPE, "temp") };
+            BlockStatement blockCode = new BlockStatement();
+            blockCode.setVariableScope(closureScope);
+            blockCode.addStatement(new ExpressionStatement(new MethodCallExpression(new VariableExpression("temp"), operation, ArgumentListExpression.EMPTY_ARGUMENTS)));
+            blockCode.addStatement(new ExpressionStatement(new VariableExpression("temp")));
+            ClosureExpression closureExpression = new ClosureExpression(parameters, blockCode);
+            closureExpression.setSourcePosition(wholeExpression);
+            MethodCallExpression retExpression = new MethodCallExpression(closureExpression, "doCall", new ArgumentListExpression(atomicExpression));
+            retExpression.setSourcePosition(closureExpression);
+            return transform(retExpression);
+        } else { // ++x -> x.next()
+            MethodCallExpression retExpression = new MethodCallExpression(atomicExpression, operation, ArgumentListExpression.EMPTY_ARGUMENTS);
+            retExpression.setSourcePosition(wholeExpression);
+            return transform(retExpression);
+        }
     }
 
     private enum OperationSide {

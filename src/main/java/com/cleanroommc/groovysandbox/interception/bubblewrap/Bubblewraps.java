@@ -7,12 +7,18 @@ public enum Bubblewraps {
     wrapSuperCall,
     wrapConstructorCall,
     wrapGetAttribute,
+    wrapSetAttribute,
     wrapGetProperty,
+    wrapSetProperty,
     wrapPrefixArray,
     wrapPostfixArray,
     wrapPrefixProperty,
     wrapPostfixProperty,
+    wrapGetArray,
+    wrapSetArray,
     wrapCast,
+    wrapComparison,
+    wrapBinaryOperation;
 
 
 }
