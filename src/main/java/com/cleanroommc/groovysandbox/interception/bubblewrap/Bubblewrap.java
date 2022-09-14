@@ -22,13 +22,6 @@ import static org.codehaus.groovy.runtime.MetaClassHelper.convertToTypeArray;
 
 public class Bubblewrap {
 
-    public static final String WRAP_STATIC_CALL = "wrapStaticCall";
-    public static final String WRAP_CALL = "wrapStaticCall";
-    public static final String WRAP_SUPER_CALL = "wrapSuperCall";
-    public static final String WRAP_CONSTRUCTOR_CALL = "wrapConstructorCall";
-    public static final String WRAP_GET_ATTRIBUTE_CALL = "wrapGetAttribute";
-    public static final String WRAP_GET_PROPERTY_CALL = "wrapGetProperty";
-
     private static final DummyCallSite CALL_SITE = new DummyCallSite();
     private static final Object[] SINGULAR_ELEMENT_ARRAY = new Object[1];
     private static final ThreadLocal<String> SOURCE = new ThreadLocal<>();
@@ -469,6 +462,16 @@ public class Bubblewrap {
     }
 
     /**
+     * ++a[i] / --a[i]
+     */
+    public static Object wrapPrefixArray(Object r, Object i, String operator) throws Throwable {
+        Object o = wrapGetArray(r, i);
+        Object n = wrapCall(o, false, false, operator);
+        wrapSetArray(r, i, Types.ASSIGN, n);
+        return n;
+    }
+
+    /**
      * a[i]++ / a[i]--
      *
      * @param operator "next" for ++, "previous" for --. These names are defined by Groovy.
@@ -481,12 +484,12 @@ public class Bubblewrap {
     }
 
     /**
-     * ++a[i] / --a[i]
+     * ++a.x / --a.x
      */
-    public static Object wrapPrefixArray(Object r, Object i, String operator) throws Throwable {
-        Object o = wrapGetArray(r, i);
+    public static Object wrapPrefixProperty(Object receiver, Object property, boolean safe, boolean spread, String operator) throws Throwable {
+        Object o = wrapGetProperty(receiver, safe, spread, property);
         Object n = wrapCall(o, false, false, operator);
-        wrapSetArray(r, i, Types.ASSIGN, n);
+        wrapSetProperty(receiver, property, safe, spread, Types.ASSIGN, n);
         return n;
     }
 
@@ -498,16 +501,6 @@ public class Bubblewrap {
         Object n = wrapCall(o, false, false, operator);
         wrapSetProperty(receiver, property, safe, spread, Types.ASSIGN, n);
         return o;
-    }
-
-    /**
-     * ++a.x / --a.x
-     */
-    public static Object wrapPrefixProperty(Object receiver, Object property, boolean safe, boolean spread, String operator) throws Throwable {
-        Object o = wrapGetProperty(receiver, safe, spread, property);
-        Object n = wrapCall(o, false, false, operator);
-        wrapSetProperty(receiver, property, safe, spread, Types.ASSIGN, n);
-        return n;
     }
 
     /**

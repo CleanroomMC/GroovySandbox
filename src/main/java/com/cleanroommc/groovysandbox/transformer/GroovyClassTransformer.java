@@ -3,16 +3,21 @@ package com.cleanroommc.groovysandbox.transformer;
 import com.cleanroommc.groovysandbox.exception.SandboxSecurityException;
 import com.cleanroommc.groovysandbox.interception.bubblewrap.Bubblewrap;
 import com.cleanroommc.groovysandbox.interception.bubblewrap.BubblewrappedMethodClosure;
+import com.cleanroommc.groovysandbox.interception.bubblewrap.Bubblewraps;
 import com.cleanroommc.groovysandbox.util.ClosureSupport;
 import groovy.lang.Script;
 import org.codehaus.groovy.ast.*;
 import org.codehaus.groovy.ast.expr.*;
 import org.codehaus.groovy.ast.stmt.*;
 import org.codehaus.groovy.control.SourceUnit;
+import org.codehaus.groovy.syntax.Token;
+import org.codehaus.groovy.syntax.Types;
 
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+
+import static org.codehaus.groovy.ast.expr.ArgumentListExpression.EMPTY_ARGUMENTS;
 
 public class GroovyClassTransformer extends ClassCodeExpressionTransformer implements VariableVisitor {
 
@@ -24,6 +29,8 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
             Script.class.getName()));
 
     private static final ClassNode BUBBLEWRAP = new ClassNode(Bubblewrap.class);
+    private static final Token ASSIGNMENT_TOKEN = new Token(Types.ASSIGN, "=", -1, -1);
+    private static final Token LEFT_SQUARE_BRACKET_TOKEN = new Token(Types.LEFT_SQUARE_BRACKET, "[", -1, -1);
 
     private SourceUnit currentSourceUnit;
     private ClassNode currentClass;
@@ -214,6 +221,10 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         return new StaticMethodCallExpression(BUBBLEWRAP, name, arguments.length == 0 ? ArgumentListExpression.EMPTY_ARGUMENTS : new ArgumentListExpression(arguments));
     }
 
+    private Expression rerouteCall(Bubblewraps bubblewrap, Expression... arguments) {
+        return rerouteCall(bubblewrap.name(), arguments);
+    }
+
     private Expression transformPropertyExpression(PropertyExpression exp) {
         if (exp.isImplicitThis() && this.withinClosure && !this.variableTracker.isIn(exp.getObjectExpression())) {
             return ClosureSupport.getClosureSelfCall();
@@ -265,7 +276,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                 if (this.currentClass == null) {
                     throw new IllegalStateException("Owning class not defined.");
                 }
-                return rerouteCall(Bubblewrap.WRAP_SUPER_CALL,
+                return rerouteCall(Bubblewraps.wrapSuperCall,
                         this.classExpression,
                         objExpression,
                         methodExpression,
@@ -273,7 +284,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                         this.sourceUnitConstantExpression,
                         new ConstantExpression(expression.getLineNumber()));
             }
-            return rerouteCall(Bubblewrap.WRAP_CALL,
+            return rerouteCall(Bubblewraps.wrapCall,
                     objExpression,
                     callExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
                     callExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
@@ -287,7 +298,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
             // E.g: Math.max(...) results in a regular MethodCallExpression.
             // However, static import handling uses this, and so are some ASTTransformations like toString, equals, hashCode.
             StaticMethodCallExpression callExpression = (StaticMethodCallExpression) expression;
-            return rerouteCall(Bubblewrap.WRAP_STATIC_CALL,
+            return rerouteCall(Bubblewraps.wrapStaticCall,
                     new ClassExpression(callExpression.getOwnerType()),
                     new ConstantExpression(callExpression.getMethod()),
                     transformArguments(callExpression.getArguments()),
@@ -303,7 +314,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         if (expression instanceof ConstructorCallExpression) {
             ConstructorCallExpression callExpression = (ConstructorCallExpression) expression;
             if (!callExpression.isSpecialCall()) {
-                return rerouteCall(Bubblewrap.WRAP_CONSTRUCTOR_CALL,
+                return rerouteCall(Bubblewraps.wrapConstructorCall,
                         new ClassExpression(expression.getType()),
                         transformArguments(callExpression.getArguments()),
                         this.sourceUnitConstantExpression,
@@ -312,7 +323,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         }
         if (expression instanceof AttributeExpression) {
             AttributeExpression attributeExpression = (AttributeExpression) expression;
-            return rerouteCall(Bubblewrap.WRAP_GET_ATTRIBUTE_CALL,
+            return rerouteCall(Bubblewraps.wrapGetAttribute,
                     transform(attributeExpression.getObjectExpression()),
                     attributeExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
                     attributeExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
@@ -322,7 +333,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         }
         if (expression instanceof PropertyExpression) {
             PropertyExpression propertyExpression = (PropertyExpression) expression;
-            return rerouteCall(Bubblewrap.WRAP_GET_PROPERTY_CALL,
+            return rerouteCall(Bubblewraps.wrapGetProperty,
                     transformPropertyExpression(propertyExpression),
                     propertyExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
                     propertyExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
@@ -332,6 +343,23 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
         }
         if (expression instanceof DeclarationExpression) {
             handleDeclarations((DeclarationExpression) expression);
+        }
+        if (expression instanceof PrefixExpression) {
+            PrefixExpression prefixExpression = (PrefixExpression) expression;
+            return operationExpression(expression, prefixExpression.getExpression(), prefixExpression.getOperation(), OperationSide.PREFIX);
+        }
+        if (expression instanceof PostfixExpression) {
+            PostfixExpression postfixExpression = (PostfixExpression) expression;
+            return operationExpression(expression, postfixExpression.getExpression(), postfixExpression.getOperation(), OperationSide.POSTFIX);
+        }
+        if (expression instanceof CastExpression) {
+            CastExpression castExpression = (CastExpression) expression;
+            return rerouteCall(Bubblewraps.wrapCast,
+                    new ClassExpression(castExpression.getType()),
+                    transform(castExpression.getExpression()),
+                    castExpression.isIgnoringAutoboxing() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    castExpression.isCoerce() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    castExpression.isStrict() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE);
         }
         return super.transform(expression);
     }
@@ -370,6 +398,84 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
                 this.variableTracker.declare((VariableExpression) tuple);
             }
         }
+    }
+
+    // Handles the cases mentioned in BinaryExpressionHelper.execMethodAndStoreForSubscriptOperator
+    private Expression operationExpression(Expression wholeExpression, Expression atomicExpression, Token task, OperationSide side) {
+        String operation = "++".equals(task.getText()) ? "next" : "previous";
+        // a[b]++
+        if (atomicExpression instanceof BinaryExpression) {
+            BinaryExpression binaryExpression = (BinaryExpression) atomicExpression;
+            if (binaryExpression.getOperation().getType() == Types.LEFT_SQUARE_BRACKET) {
+                return rerouteCall(side.arrayCall,
+                        transform(binaryExpression.getLeftExpression()),
+                        transform(binaryExpression.getRightExpression()),
+                        new ConstantExpression(operation));
+            }
+        }
+        // a++
+        if (atomicExpression instanceof VariableExpression) {
+            VariableExpression variableExpression = (VariableExpression) atomicExpression;
+            if (this.variableTracker.isIn(variableExpression)) {
+                if (side == OperationSide.POSTFIX) {
+                    // A trick to rewrite a++ without introducing a new local variable
+                    // a++ -> [a, a = a.next()][0]
+                    ListExpression lhs = new ListExpression();
+                    lhs.addExpression(atomicExpression);
+                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, EMPTY_ARGUMENTS);
+                    operationCallExpression.setSourcePosition(atomicExpression);
+                    lhs.addExpression(operationCallExpression);
+                    BinaryExpression replacement = new BinaryExpression(lhs, LEFT_SQUARE_BRACKET_TOKEN, new ConstantExpression(0, true));
+                    replacement.setSourcePosition(wholeExpression);
+                    return transform(replacement);
+                } else { // ++a -> a = a.next()
+                    MethodCallExpression operationCallExpression = new MethodCallExpression(atomicExpression, operation, EMPTY_ARGUMENTS);
+                    BinaryExpression replacement = new BinaryExpression(atomicExpression, ASSIGNMENT_TOKEN, operationCallExpression);
+                    replacement.setSourcePosition(wholeExpression);
+                    return transform(replacement);
+                }
+            } else {
+                // If the variable is not in-scope local variable, it gets treated as a property access with implicit this.
+                // See AsmClassGenerator.visitVariableExpression and processClassVariable.
+                PropertyExpression propertyExpression = new PropertyExpression(VariableExpression.THIS_EXPRESSION, variableExpression);
+                propertyExpression.setImplicitThis(true);
+                propertyExpression.setSourcePosition(atomicExpression);
+                atomicExpression = propertyExpression;
+                // Fall through to the "a.b++" case below
+            }
+        }
+        // a.b++
+        if (atomicExpression instanceof PropertyExpression) {
+            PropertyExpression propertyExpression = (PropertyExpression) atomicExpression;
+            return rerouteCall(side.propertyCall,
+                    transformPropertyExpression(propertyExpression),
+                    transformArguments(propertyExpression.getProperty()),
+                    propertyExpression.isSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    propertyExpression.isSpreadSafe() ? ConstantExpression.PRIM_TRUE : ConstantExpression.PRIM_FALSE,
+                    new ConstantExpression(operation));
+        }
+        // a.b++ where a.b is a FieldExpression.
+        // TODO: It is unclear if this is actually reachable. I think that syntax like `a.b` will always be a PropertyExpression in this context.
+        //  We handle it explicitly as a precaution, since the catch-all below does not store the result, which would definitely be wrong for FieldExpression.
+        if (atomicExpression instanceof FieldExpression) {
+            // See note in innerTransform regarding FieldExpression; this type of expression cannot be intercepted.
+            return atomicExpression;
+        }
+
+    }
+
+    private enum OperationSide {
+
+        PREFIX(Bubblewraps.wrapPrefixArray, Bubblewraps.wrapPrefixProperty),
+        POSTFIX(Bubblewraps.wrapPostfixArray, Bubblewraps.wrapPostfixProperty);
+
+        private final Bubblewraps arrayCall, propertyCall;
+
+        private OperationSide(Bubblewraps arrayCall, Bubblewraps propertyCall) {
+            this.arrayCall = arrayCall;
+            this.propertyCall = propertyCall;
+        }
+
     }
 
 }
