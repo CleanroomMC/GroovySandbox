@@ -683,8 +683,11 @@ public class Bubblewrap {
      * If the receiver overrides this method, return false since we don't know how such methods behave.
      */
     private static boolean isInvokingMethodOnClosure(Object receiver, String method, Object... args) {
-        MetaMethod m = InvokerHelper.getMetaClass(receiver).pickMethod(method, MetaClassHelper.convertToTypeArray(args));
-        return m != null && m.getDeclaringClass().isAssignableFrom(Closure.class);
+        if (receiver instanceof Closure) {
+            MetaMethod m = InvokerHelper.getMetaClass(receiver).pickMethod(method, MetaClassHelper.convertToTypeArray(args));
+            return m != null && m.getDeclaringClass().isAssignableFrom(Closure.class);
+        }
+        return false;
     }
 
     /**
