@@ -15,9 +15,7 @@ import org.codehaus.groovy.runtime.ScriptBytecodeAdapter;
 import org.codehaus.groovy.syntax.Token;
 import org.codehaus.groovy.syntax.Types;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
 
 public class GroovyClassTransformer extends ClassCodeExpressionTransformer implements VariableVisitor {
 
@@ -27,6 +25,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
     private static final Set<String> TRIVIAL_CONSTRUCTORS = new HashSet<>(Arrays.asList(
             Object.class.getName(),
             Script.class.getName()));
+    private static final ClassNode OBJECT_CLASS_NODE = new ClassNode(Object.class);
 
     private static final ClassNode BUBBLEWRAP = new ClassNode(Bubblewrap.class);
     private static final Token ASSIGNMENT_TOKEN = new Token(Types.ASSIGN, "=", -1, -1);
@@ -415,9 +414,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
             }
             if (binaryExpressionType == Types.LEFT_SQUARE_BRACKET) { // Array reference
                 return rerouteCall(Bubblewraps.wrapGetArray, transform(binaryExpression.getLeftExpression()), transform(binaryExpression.getRightExpression()));
-            } else if (binaryExpressionType == Types.KEYWORD_INSTANCEOF) { // instanceof operator
-                return super.transform(expression);
-            } else if (Operators.isLogicalOperator(binaryExpressionType)) {
+            } else if (binaryExpressionType == Types.KEYWORD_INSTANCEOF || Operators.isLogicalOperator(binaryExpressionType)) { // instanceof operator or logical operator
                 return super.transform(expression);
             } else if (binaryExpressionType == Types.KEYWORD_IN) {
                 // Membership operator: issue JENKINS-28154
@@ -477,17 +474,28 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
      * Groovy primarily uses {@link ArgumentListExpression} for this, but the signature doesn't guarantee that. So this method takes care of that.
      */
     private Expression transformArguments(Expression expression) {
-        ListExpression listExpression = new ListExpression();
+        boolean containsSpread = false;
+        List<Expression> expressions;
         if (expression instanceof TupleExpression) {
+            expressions = new ArrayList<>();
             TupleExpression tupleExpression = (TupleExpression) expression;
             for (int i = 0; i < tupleExpression.getExpressions().size(); i++) {
-                listExpression.addExpression(transform(tupleExpression.getExpression(i)));
+                Expression tupleExpressionElement = tupleExpression.getExpression(i);
+                containsSpread |= tupleExpressionElement instanceof SpreadExpression;
+                expressions.add(transform(tupleExpressionElement));
             }
         } else {
-            listExpression.addExpression(transform(expression));
+            expressions = Collections.singletonList(transform(expression));
+            containsSpread = expression instanceof SpreadExpression;
         }
+        // Only call toArray when there is a need to expand the spread operator, otherwise use ArrayExpression
         // wrapCall expects an array
-        MethodCallExpression retExpression = new MethodCallExpression(listExpression, "toArray", ArgumentListExpression.EMPTY_ARGUMENTS);
+        Expression retExpression;
+        if (containsSpread) {
+            retExpression = new MethodCallExpression(new ListExpression(expressions), "toArray", ArgumentListExpression.EMPTY_ARGUMENTS);
+        } else {
+            retExpression = new ArrayExpression(OBJECT_CLASS_NODE, expressions);
+        }
         retExpression.setSourcePosition(expression);
         return retExpression;
     }
