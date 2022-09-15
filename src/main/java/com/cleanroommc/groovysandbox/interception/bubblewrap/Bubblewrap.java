@@ -22,18 +22,20 @@ import static org.codehaus.groovy.runtime.MetaClassHelper.convertToTypeArray;
 
 public class Bubblewrap {
 
-    private static final DummyCallSite CALL_SITE = new DummyCallSite();
+    public static final Object[] EMPTY_ARRAY = new Object[0];
+
     private static final Object[] SINGULAR_ELEMENT_ARRAY = new Object[1];
+    private static final DummyCallSite CALL_SITE = new DummyCallSite();
     private static final ThreadLocal<String> SOURCE = new ThreadLocal<>();
     private static final ThreadLocal<Integer> LINE_NUMBER = new ThreadLocal<>();
 
-    public static Object wrapStaticCall(Class receiver, String method, String source, int line, Object... args) throws Throwable {
+    public static Object wrapStaticCall(Class receiver, String method, String source, int line, Object[] args) throws Throwable {
         SOURCE.set(source);
         LINE_NUMBER.set(line);
         return wrapStaticCall(receiver, method, args);
     }
 
-    public static Object wrapStaticCall(Class receiver, String method, Object... args) throws Throwable {
+    public static Object wrapStaticCall(Class receiver, String method, Object[] args) throws Throwable {
         return new InterceptChain() {
             @Override
             public Object call(Object receiver, String method, Object... args) throws Throwable {
@@ -48,13 +50,13 @@ public class Bubblewrap {
         }.call(receiver, method, fixNullArgs(args));
     }
 
-    public static Object wrapConstructorCall(Class type, String source, int line, Object... args) throws Throwable {
+    public static Object wrapConstructorCall(Class type, String source, int line, Object[] args) throws Throwable {
         SOURCE.set(source);
         LINE_NUMBER.set(line);
         return wrapConstructorCall(type, args);
     }
 
-    public static Object wrapConstructorCall(Class type, Object... args) throws Throwable {
+    public static Object wrapConstructorCall(Class type, Object[] args) throws Throwable {
         CallSiteSelector.findConstructor(type, args); // TODO: cache this in a lookup?
         return new InterceptChain() {
             @Override
@@ -70,13 +72,13 @@ public class Bubblewrap {
         }.call(type, "<init>", fixNullArgs(args));
     }
 
-    public static Object wrapCall(Object receiver, boolean safe, boolean spread, String method, String source, int line, Object... args) throws Throwable {
+    public static Object wrapCall(Object receiver, boolean safe, boolean spread, String method, Object[] args, String source, int line) throws Throwable {
         SOURCE.set(source);
         LINE_NUMBER.set(line);
         return wrapCall(receiver, safe, spread, method, args);
     }
 
-    public static Object wrapCall(Object receiver, boolean safe, boolean spread, String method, Object... args) throws Throwable {
+    public static Object wrapCall(Object receiver, boolean safe, boolean spread, String method, Object[] args) throws Throwable {
         if (safe && receiver == null) {
             return null;
         }
@@ -132,7 +134,7 @@ public class Bubblewrap {
                 // Second phase: try calling invokeMethod on them
                 for (Object candidate : targets) {
                     try {
-                        return wrapCall(candidate, false, false, "invokeMethod", method, args);
+                        return wrapCall(candidate, false, false, "invokeMethod", new Object[] { method, args });
                     } catch (MissingMethodException ignored) { } // Try the next one
                 }
                 // We tried to be smart about Closure.invokeMethod, but we are just not finding any.
@@ -179,8 +181,8 @@ public class Bubblewrap {
         }.call(/*$super*/null, method, fixNullArgs(args));
     }
 
-    public static SuperConstructorWrapper wrapSuperConstructor(Class<?> thisClass, Class<?> superClass, Object[] superCallArgs, Object[] constructorArgs,
-                                                               Class<?>[] paramTypes) throws Throwable {
+    public static SuperConstructorWrapper wrapSuperConstructor(Class<?> thisClass, Class<?> superClass, Object[] superCallArgs, Object[] constructorArgs, Class<?>[] paramTypes)
+            throws Throwable {
         // Make sure that the call to this synthetic constructor is not illegal.
         CallSiteSelector.findConstructor(superClass, superCallArgs);
         explicitConstructorCallSanity(thisClass, SuperConstructorWrapper.class, constructorArgs, paramTypes);
@@ -197,7 +199,8 @@ public class Bubblewrap {
         return new SuperConstructorWrapper(superCallArgs);
     }
 
-    public static Object wrapThisConstructor(final Class<?> clazz, Object[] thisCallArgs, Object[] constructorArgs, Class<?>[] constructorParamTypes, String source, int line) throws Throwable {
+    public static Object wrapThisConstructor(final Class<?> clazz, Object[] thisCallArgs, Object[] constructorArgs, Class<?>[] constructorParamTypes, String source, int line)
+            throws Throwable {
         SOURCE.set(source);
         LINE_NUMBER.set(line);
         return wrapThisConstructor(clazz, thisCallArgs, constructorArgs, constructorParamTypes);
@@ -259,7 +262,7 @@ public class Bubblewrap {
             throw new MissingPropertyException(property.toString(), receiver.getClass());
         }
         if (receiver instanceof Map) { // MetaClassImpl.getProperty looks for Map subtype and handles it as Map.get call, so dispatch that call accordingly.
-            return wrapCall(receiver, false, false, "get", property);
+            return wrapCall(receiver, false, false, "get", new Object[] { property });
         }
         return new InterceptChain() {
             @Override
@@ -314,7 +317,7 @@ public class Bubblewrap {
             throw new MissingPropertyException(property.toString(), receiver.getClass());
         }
         if (receiver instanceof Map) { // MetaClassImpl.getProperty looks for Map subtype and handles it as Map.put call, so dispatch that call accordingly.
-            wrapCall(receiver, false, false, "put", property, value);
+            wrapCall(receiver, false, false, "put", new Object[] {  property, value });
             return value;
         }
         return new InterceptChain() {
@@ -422,7 +425,7 @@ public class Bubblewrap {
                 if (callInterceptor != null) {
                     return callInterceptor.onGetArray(this, receiver, index);
                 } else {
-                    CALL_SITE.name = "getAt"; // BinaryExpressionHelper.eval maps this to "getAt" call
+                    setCallSite("getAt"); // BinaryExpressionHelper.eval maps this to "getAt" call
                     return CALL_SITE.call(receiver, index);
                 }
             }
@@ -452,7 +455,7 @@ public class Bubblewrap {
                 if (callInterceptor != null) {
                     return callInterceptor.onSetArray(this, receiver, args[0], args[1]);
                 } else {
-                    CALL_SITE.name = "putAt"; // BinaryExpressionHelper.assignToArray maps this to "putAt" call
+                    setCallSite("putAt"); // BinaryExpressionHelper.assignToArray maps this to "putAt" call
                     return CALL_SITE.call(receiver, index, value);
                 }
             }
@@ -464,7 +467,7 @@ public class Bubblewrap {
      */
     public static Object wrapPrefixArray(Object r, Object i, String operator) throws Throwable {
         Object o = wrapGetArray(r, i);
-        Object n = wrapCall(o, false, false, operator);
+        Object n = wrapCall(o, false, false, operator, EMPTY_ARRAY);
         wrapSetArray(r, i, Types.ASSIGN, n);
         return n;
     }
@@ -476,7 +479,7 @@ public class Bubblewrap {
      */
     public static Object wrapPostfixArray(Object r, Object i, String operator) throws Throwable {
         Object o = wrapGetArray(r, i);
-        Object n = wrapCall(o, false, false, operator);
+        Object n = wrapCall(o, false, false, operator, EMPTY_ARRAY);
         wrapSetArray(r, i, Types.ASSIGN, n);
         return o;
     }
@@ -486,7 +489,7 @@ public class Bubblewrap {
      */
     public static Object wrapPrefixProperty(Object receiver, Object property, boolean safe, boolean spread, String operator) throws Throwable {
         Object o = wrapGetProperty(receiver, safe, spread, property);
-        Object n = wrapCall(o, false, false, operator);
+        Object n = wrapCall(o, false, false, operator, EMPTY_ARRAY);
         wrapSetProperty(receiver, property, safe, spread, Types.ASSIGN, n);
         return n;
     }
@@ -496,7 +499,7 @@ public class Bubblewrap {
      */
     public static Object wrapPostfixProperty(Object receiver, Object property, boolean safe, boolean spread, String operator) throws Throwable {
         Object o = wrapGetProperty(receiver, safe, spread, property);
-        Object n = wrapCall(o, false, false, operator);
+        Object n = wrapCall(o, false, false, operator, EMPTY_ARRAY);
         wrapSetProperty(receiver, property, safe, spread, Types.ASSIGN, n);
         return o;
     }
@@ -510,7 +513,7 @@ public class Bubblewrap {
      * @see BinaryExpressionHelper#evaluateBinaryExpressionWithAssignment
      */
     public static Object wrapBinaryOperation(Object lhs, int operator, Object rhs) throws Throwable {
-        return wrapCall(lhs, false, false, Operators.binaryOperatorMethods(operator), rhs);
+        return wrapCall(lhs, false, false, Operators.binaryOperatorMethods(operator), new Object[] { rhs });
     }
 
     /**

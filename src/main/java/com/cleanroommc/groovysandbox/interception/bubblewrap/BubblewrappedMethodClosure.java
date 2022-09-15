@@ -6,7 +6,6 @@ import org.codehaus.groovy.runtime.MethodClosure;
 
 public class BubblewrappedMethodClosure extends MethodClosure {
 
-    private static final Object[] EMPTY_ARRAY = new Object[0];
     private static final Object[] SINGULAR_ELEMENT_ARRAY = new Object[1];
     private static final String DUMMY_METHOD_NAME = "BubblewrappedClosure";
 
@@ -17,7 +16,7 @@ public class BubblewrappedMethodClosure extends MethodClosure {
     @Override
     protected Object doCall(Object arguments) {
         if (arguments == null) {
-            return doCall(EMPTY_ARRAY);
+            return doCall(Bubblewrap.EMPTY_ARRAY);
         }
         if (arguments instanceof Object[]) {
             return (Object[]) arguments;
@@ -33,14 +32,14 @@ public class BubblewrappedMethodClosure extends MethodClosure {
      */
     protected Object doCall(Object[] arguments) {
         try {
-            return Bubblewrap.wrapCall(getOwner(), false, false, getMethod(), DUMMY_METHOD_NAME, -1, arguments);
+            return Bubblewrap.wrapCall(getOwner(), false, false, getMethod(), arguments, DUMMY_METHOD_NAME, -1);
         } catch (Throwable e) {
             throw new InvokerInvocationException(e);
         }
     }
 
     protected Object doCall() {
-        return doCall(EMPTY_ARRAY);
+        return doCall(Bubblewrap.EMPTY_ARRAY);
     }
 
 }

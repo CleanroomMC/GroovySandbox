@@ -259,7 +259,7 @@ public class GroovyClassTransformer extends ClassCodeExpressionTransformer imple
             }
         }
         if (expression instanceof MethodCallExpression) {
-            // lhs.foo(arg1, arg2) => checkedCall(lhs, "foo", arg1, arg2)
+            // lhs.foo(arg1, arg2) => wrapCall(lhs, "foo", arg1, arg2)
             // lhs + rhs => lhs.plus(rhs)
             // Integer.plus(Integer) => DefaultGroovyMethods.plus
             // lhs || rhs => lhs.or(rhs)
